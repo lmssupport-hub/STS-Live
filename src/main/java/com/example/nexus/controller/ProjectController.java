@@ -1,10 +1,8 @@
 package com.example.nexus.controller;
 
 import java.util.List;
-
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
-
 import com.example.nexus.entity.Project;
 import com.example.nexus.service.ProjectService;
 
@@ -29,6 +27,12 @@ public class ProjectController {
     @GetMapping("/{id}")
     public Project getProjectById(@PathVariable Long id) {
         return projectService.getProjectById(id);
+    }
+
+    
+    @PutMapping("/{id}")
+    public Project updateProject(@PathVariable Long id, @RequestBody Project project) {
+        return projectService.updateProject(id, project);
     }
 
     @DeleteMapping("/{id}")

@@ -30,15 +30,12 @@ public class User {
     private boolean termsAccepted;
 
     // ── Forgot Password support ─────────────────────────────────────
-
     @Column(length = 10)
     private String resetOtp;
-
     private LocalDateTime resetOtpExpiry;
 
     @Column(length = 100)
     private String resetToken;
-
     private LocalDateTime resetTokenExpiry;
 
     @Column(nullable = false, columnDefinition = "integer default 0")
@@ -46,6 +43,32 @@ public class User {
 
     @Column(nullable = false, columnDefinition = "integer default 0")
     private int resetSendCount = 0;
+
+    @Column(nullable = false, length = 20)
+    private String role = "ADMIN"; // default until role management is built
+
+    @Column(nullable = false, updatable = false)
+    private LocalDateTime createdAt;
+
+    @PrePersist
+    protected void onCreate() {
+        this.createdAt = LocalDateTime.now();
+    }
+
+    @Column
+    private LocalDateTime lastLoginAt;
+
+    @Column(name = "assigned_package_id")
+    private Long assignedPackageId;
+
+    @Column(name = "assigned_role_id")
+    private Long assignedRoleId;
+
+    // NEW — set only for users who registered through an Admin's invite link.
+    // Lets an Admin's "Our Circle" list show exactly the members THEY invited.
+    @Column(name = "created_by_admin_id")
+    private Long createdByAdminId;
+
 
     // Getters and Setters
     public Long getId() { return id; }
@@ -86,4 +109,22 @@ public class User {
 
     public int getResetSendCount() { return resetSendCount; }
     public void setResetSendCount(int resetSendCount) { this.resetSendCount = resetSendCount; }
+
+    public String getRole() { return role; }
+    public void setRole(String role) { this.role = role; }
+
+    public LocalDateTime getCreatedAt() { return createdAt; }
+
+    public LocalDateTime getLastLoginAt() { return lastLoginAt; }
+    public void setLastLoginAt(LocalDateTime lastLoginAt) { this.lastLoginAt = lastLoginAt; }
+
+    public Long getAssignedPackageId() { return assignedPackageId; }
+    public void setAssignedPackageId(Long assignedPackageId) { this.assignedPackageId = assignedPackageId; }
+
+    public Long getAssignedRoleId() { return assignedRoleId; }
+    public void setAssignedRoleId(Long assignedRoleId) { this.assignedRoleId = assignedRoleId; }
+
+    public Long getCreatedByAdminId() { return createdByAdminId; }
+    public void setCreatedByAdminId(Long createdByAdminId) { this.createdByAdminId = createdByAdminId; }
+
 }

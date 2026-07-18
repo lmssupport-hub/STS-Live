@@ -1,5 +1,6 @@
 package com.example.nexus.service;
 
+import com.example.nexus.dto.EffectivePermissionsDto;
 import com.example.nexus.dto.PackageDto;
 import com.example.nexus.dto.RoleDto;
 import com.example.nexus.entity.RoleEntity;
@@ -168,7 +169,12 @@ public class RoleService {
             PackageDto.Category clampedCat = new PackageDto.Category();
             clampedCat.setId(cat.getId());
             clampedCat.setName(cat.getName());
-            clampedCat.setEnabled(anyOn);
+            // Keep the category enabled if either: (a) at least one clamped feature
+            // permission is on, or (b) the requester explicitly toggled the category on
+            // AND the admin's own package also grants that category. This second path
+            // covers categories like "Authentication" that are driven purely by the
+            // category-level toggle rather than per-feature checkboxes.
+            clampedCat.setEnabled(anyOn || (cat.isEnabled() && allowedCat.isEnabled()));
             clampedCat.setFeatures(clampedFeatures);
             result.add(clampedCat);
         }
@@ -197,5 +203,97 @@ public class RoleService {
         response.setCreatedAt(entity.getCreatedAt());
         response.setPermissions(permissionJsonMapper.fromJson(entity.getPermissionsJson()));
         return response;
+    }
+
+    // ── Single source of truth for "what can this logged-in user see/do" ──
+    // SUPER_ADMIN -> fullAccess=true (frontend shows everything, no check needed)
+    // ADMIN       -> resolved from their assigned PACKAGE
+    // everyone else (MEMBER / custom roles) -> resolved from their assigned ROLE
+    @Transactional(readOnly = true)
+    public EffectivePermissionsDto getEffectivePermissions(String email) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+
+        EffectivePermissionsDto dto = new EffectivePermissionsDto();
+        dto.setRoleType(user.getRole());
+
+        if ("SUPER_ADMIN".equals(user.getRole())) {
+            dto.setFullAccess(true);
+            dto.setPermissions(List.of());
+            return dto;
+        }
+
+        dto.setFullAccess(false);
+
+        if ("ADMIN".equals(user.getRole())) {
+            if (user.getAssignedPackageId() == null) {
+                dto.setPermissions(List.of());
+                return dto;
+            }
+            PackageDto.Response pkg = packageService.getPackageById(user.getAssignedPackageId());
+            List<PackageDto.Category> categories = pkg.getPermissions() == null ? List.of() : pkg.getPermissions();
+            dto.setPermissions(categories.stream()
+                    .filter(PackageDto.Category::isEnabled)
+                    .collect(Collectors.toList()));
+            return dto;
+        }
+
+        // MEMBER or any other custom role -> permissions come from their assigned ROLE
+        if (user.getAssignedRoleId() == null) {
+            dto.setPermissions(List.of());
+            return dto;
+        }
+
+        RoleEntity roleEntity = roleRepository.findById(user.getAssignedRoleId()).orElse(null);
+        if (roleEntity == null) {
+            dto.setPermissions(List.of());
+            return dto;
+        }
+
+        List<PackageDto.Category> categories = permissionJsonMapper.fromJson(roleEntity.getPermissionsJson());
+        dto.setPermissions(categories.stream()
+                .filter(PackageDto.Category::isEnabled)
+                .collect(Collectors.toList()));
+        return dto;
+    }
+
+    // ── Login gate — the "Authentication" category toggle must be ON for this
+    //    user's package (ADMIN) or role (MEMBER/custom) before they're allowed to log in.
+    //    No sub-feature needed — just the category-level enabled flag.
+    //    SUPER_ADMIN always passes — never gated by any toggle.
+    @Transactional(readOnly = true)
+    public boolean hasAuthenticationAccess(String email) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+
+        if ("SUPER_ADMIN".equals(user.getRole())) {
+            return true;
+        }
+
+        List<PackageDto.Category> categories;
+
+        if ("ADMIN".equals(user.getRole())) {
+            if (user.getAssignedPackageId() == null) {
+                return false;
+            }
+            try {
+                PackageDto.Response pkg = packageService.getPackageById(user.getAssignedPackageId());
+                categories = pkg.getPermissions() == null ? List.of() : pkg.getPermissions();
+            } catch (ResourceNotFoundException e) {
+                return false; // package was deleted after being assigned
+            }
+        } else {
+            if (user.getAssignedRoleId() == null) {
+                return false;
+            }
+            RoleEntity roleEntity = roleRepository.findById(user.getAssignedRoleId()).orElse(null);
+            if (roleEntity == null) {
+                return false;
+            }
+            categories = permissionJsonMapper.fromJson(roleEntity.getPermissionsJson());
+        }
+
+        return categories.stream()
+                .anyMatch(c -> "auth".equals(c.getId()) && c.isEnabled());
     }
 }

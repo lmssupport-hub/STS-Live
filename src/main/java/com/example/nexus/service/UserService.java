@@ -38,6 +38,9 @@ public class UserService {
     @Autowired
     private InviteService inviteService;
 
+    @Autowired
+    private RoleService roleService; // used for the Authentication category login gate
+
    
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
@@ -113,6 +116,29 @@ public class UserService {
             return ResponseEntity
                     .status(HttpStatus.UNAUTHORIZED)
                     .body(Map.of("message", "Invalid Email or Password"));
+        }
+
+        // ── Access-gate: block login if the account has no permission source yet ──
+        // SUPER_ADMIN never needs a check, ella screenum full access.
+        if ("ADMIN".equals(user.getRole()) && user.getAssignedPackageId() == null) {
+            return ResponseEntity
+                    .status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("message", "No package has been assigned to your account yet. Contact your Super Admin."));
+        }
+        if (!"SUPER_ADMIN".equals(user.getRole())
+                && !"ADMIN".equals(user.getRole())
+                && user.getAssignedRoleId() == null) {
+            return ResponseEntity
+                    .status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("message", "No role has been assigned to your account yet. Contact your Admin."));
+        }
+
+        // ── Access-gate: "Authentication" category toggle must be ON in the
+        //    assigned package/role, or login itself is blocked (even with correct password).
+        if (!roleService.hasAuthenticationAccess(user.getEmail())) {
+            return ResponseEntity
+                    .status(HttpStatus.FORBIDDEN)
+                    .body(Map.of("message", "Login access has been disabled for your account. Contact your Admin."));
         }
 
       

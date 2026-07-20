@@ -54,6 +54,9 @@ public class Meeting {
     @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
+    @Column(name = "team_admin_id", nullable = false)
+    private Long teamAdminId;
+    
     private LocalDateTime updatedAt;
 
     @PrePersist
@@ -107,4 +110,7 @@ public class Meeting {
 
     public LocalDateTime getUpdatedAt()                { return updatedAt; }
     public void setUpdatedAt(LocalDateTime updatedAt)  { this.updatedAt = updatedAt; }
+    
+    public Long getTeamAdminId() { return teamAdminId; }
+    public void setTeamAdminId(Long teamAdminId) { this.teamAdminId = teamAdminId; }
 }

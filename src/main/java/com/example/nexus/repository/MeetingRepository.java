@@ -1,53 +1,50 @@
 package com.example.nexus.repository;
-
 import com.example.nexus.entity.Meeting;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
-
 import java.util.List;
-
 @Repository
 public interface MeetingRepository extends JpaRepository<Meeting, Long> {
 
-    // Filter by status
-    List<Meeting> findByStatus(String status);
+    List<Meeting> findByTeamAdminId(Long teamAdminId);
 
-    // Filter by owner
-    List<Meeting> findByOwnerId(Long ownerId);
+    List<Meeting> findByStatusAndTeamAdminId(String status, Long teamAdminId);
 
-    // Filter by status + owner
-    List<Meeting> findByStatusAndOwnerId(String status, Long ownerId);
+    List<Meeting> findByOwnerIdAndTeamAdminId(Long ownerId, Long teamAdminId);
 
-    // Full-text search on title or agenda (case-insensitive)
-    @Query("SELECT m FROM Meeting m WHERE " +
-           "LOWER(m.title) LIKE LOWER(CONCAT('%', :keyword, '%')) OR " +
-           "LOWER(m.agenda) LIKE LOWER(CONCAT('%', :keyword, '%'))")
-    List<Meeting> searchByKeyword(@Param("keyword") String keyword);
+    List<Meeting> findByStatusAndOwnerIdAndTeamAdminId(String status, Long ownerId, Long teamAdminId);
 
-    // Search + status filter
     @Query("SELECT m FROM Meeting m WHERE " +
            "(LOWER(m.title) LIKE LOWER(CONCAT('%', :keyword, '%')) OR " +
            " LOWER(m.agenda) LIKE LOWER(CONCAT('%', :keyword, '%'))) " +
-           "AND m.status = :status")
+           "AND m.teamAdminId = :teamAdminId")
+    List<Meeting> searchByKeyword(@Param("keyword") String keyword,
+                                   @Param("teamAdminId") Long teamAdminId);
+
+    @Query("SELECT m FROM Meeting m WHERE " +
+           "(LOWER(m.title) LIKE LOWER(CONCAT('%', :keyword, '%')) OR " +
+           " LOWER(m.agenda) LIKE LOWER(CONCAT('%', :keyword, '%'))) " +
+           "AND m.status = :status AND m.teamAdminId = :teamAdminId")
     List<Meeting> searchByKeywordAndStatus(@Param("keyword") String keyword,
-                                           @Param("status") String status);
+                                           @Param("status") String status,
+                                           @Param("teamAdminId") Long teamAdminId);
 
-    // Search + owner filter
     @Query("SELECT m FROM Meeting m WHERE " +
            "(LOWER(m.title) LIKE LOWER(CONCAT('%', :keyword, '%')) OR " +
            " LOWER(m.agenda) LIKE LOWER(CONCAT('%', :keyword, '%'))) " +
-           "AND m.ownerId = :ownerId")
+           "AND m.ownerId = :ownerId AND m.teamAdminId = :teamAdminId")
     List<Meeting> searchByKeywordAndOwner(@Param("keyword") String keyword,
-                                          @Param("ownerId") Long ownerId);
+                                          @Param("ownerId") Long ownerId,
+                                          @Param("teamAdminId") Long teamAdminId);
 
-    // Search + status + owner filter
     @Query("SELECT m FROM Meeting m WHERE " +
            "(LOWER(m.title) LIKE LOWER(CONCAT('%', :keyword, '%')) OR " +
            " LOWER(m.agenda) LIKE LOWER(CONCAT('%', :keyword, '%'))) " +
-           "AND m.status = :status AND m.ownerId = :ownerId")
+           "AND m.status = :status AND m.ownerId = :ownerId AND m.teamAdminId = :teamAdminId")
     List<Meeting> searchByKeywordStatusAndOwner(@Param("keyword") String keyword,
                                                 @Param("status") String status,
-                                                @Param("ownerId") Long ownerId);
+                                                @Param("ownerId") Long ownerId,
+                                                @Param("teamAdminId") Long teamAdminId);
 }

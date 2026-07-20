@@ -48,4 +48,12 @@ public class UserController {
     public ResponseEntity<?> deleteUser(@PathVariable Long id) {
         return userService.deleteUser(id);
     }
+    
+    @GetMapping("/team-members")
+    public ResponseEntity<?> getTeamMembers(@RequestHeader("Authorization") String authHeader) {
+        String token = authHeader.replace("Bearer ", "");
+        String email = jwtUtil.extractEmail(token);
+        return userService.getTeamMembers(email);
+    }
+    
 }

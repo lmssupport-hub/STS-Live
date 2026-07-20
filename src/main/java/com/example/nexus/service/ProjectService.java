@@ -7,7 +7,9 @@ import org.springframework.stereotype.Service;
 import com.example.nexus.entity.Project;
 import com.example.nexus.entity.ProjectFormulaExtraField;
 import com.example.nexus.entity.ProjectFormulaRow;
+import com.example.nexus.entity.User;
 import com.example.nexus.repository.ProjectRepository;
+import com.example.nexus.repository.UserRepository;
 
 @Service
 public class ProjectService {
@@ -15,7 +17,25 @@ public class ProjectService {
     @Autowired
     private ProjectRepository projectRepository;
 
-    public Project createProject(Project project) {
+    @Autowired
+    private UserRepository userRepository;
+
+    // ── Resolve which "team" the requester belongs to ───────────────
+    // Admin/Super Admin → their own id. Member → the admin who invited them.
+    private Long resolveTeamAdminId(String requesterEmail) {
+        User requester = userRepository.findByEmail(requesterEmail)
+                .orElseThrow(() -> new RuntimeException("Invalid session"));
+        if ("ADMIN".equals(requester.getRole()) || "SUPER_ADMIN".equals(requester.getRole())) {
+            return requester.getId();
+        }
+        if (requester.getCreatedByAdminId() == null) {
+            throw new RuntimeException("Your account is not linked to a team yet");
+        }
+        return requester.getCreatedByAdminId();
+    }
+
+    public Project createProject(Project project, String requesterEmail) {
+        project.setTeamAdminId(resolveTeamAdminId(requesterEmail));
         validateProject(project, null);
 
         double target = calculateTarget(project.getFormulaRows());
@@ -31,19 +51,26 @@ public class ProjectService {
         return projectRepository.save(project);
     }
 
-    public List<Project> getAllProjects() {
-        return projectRepository.findAll();
+    public List<Project> getAllProjects(String requesterEmail) {
+        return projectRepository.findByTeamAdminId(resolveTeamAdminId(requesterEmail));
     }
 
-    public Project getProjectById(Long id) {
-        return projectRepository.findById(id)
+    public Project getProjectById(Long id, String requesterEmail) {
+        Project project = projectRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Project not found"));
+        if (!project.getTeamAdminId().equals(resolveTeamAdminId(requesterEmail))) {
+            throw new RuntimeException("You don't have access to this project");
+        }
+        return project;
     }
 
-    // ✅ NEW
-    public Project updateProject(Long id, Project updatedProject) {
+    public Project updateProject(Long id, Project updatedProject, String requesterEmail) {
         Project existing = projectRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Project not found"));
+
+        if (!existing.getTeamAdminId().equals(resolveTeamAdminId(requesterEmail))) {
+            throw new RuntimeException("You don't have access to this project");
+        }
 
         validateProject(updatedProject, id);
 
@@ -58,13 +85,13 @@ public class ProjectService {
         existing.setAssignedUsers(updatedProject.getAssignedUsers());
 
         existing.getFormulaRows().clear();
-        projectRepository.saveAndFlush(existing); 
+        projectRepository.saveAndFlush(existing);
 
         for (ProjectFormulaRow row : updatedProject.getFormulaRows()) {
-            row.setId(null); 
+            row.setId(null);
             row.setProject(existing);
             for (ProjectFormulaExtraField extra : row.getExtraFields()) {
-                extra.setId(null); 
+                extra.setId(null);
                 extra.setFormulaRow(row);
             }
             existing.getFormulaRows().add(row);
@@ -73,11 +100,15 @@ public class ProjectService {
         return projectRepository.save(existing);
     }
 
-    public void deleteProject(Long id) {
+    public void deleteProject(Long id, String requesterEmail) {
+        Project existing = projectRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Project not found"));
+        if (!existing.getTeamAdminId().equals(resolveTeamAdminId(requesterEmail))) {
+            throw new RuntimeException("You don't have access to this project");
+        }
         projectRepository.deleteById(id);
     }
 
-    // ✅ UPDATED - accepts currentId (null for create, non-null for update)
     private void validateProject(Project project, Long currentId) {
         if (isBlank(project.getProjectName())) {
             throw new RuntimeException("Project Name is required");
@@ -85,7 +116,6 @@ public class ProjectService {
 
         String trimmedName = project.getProjectName().trim();
 
-        // ✅ For create: check all; for update: exclude self
         boolean nameExists = (currentId == null)
                 ? projectRepository.existsByProjectNameIgnoreCase(trimmedName)
                 : projectRepository.existsByProjectNameIgnoreCaseAndIdNot(trimmedName, currentId);
@@ -214,4 +244,8 @@ public class ProjectService {
     private boolean isBlank(String value) {
         return value == null || value.trim().isEmpty();
     }
+    
+    
+    
+    
 }

@@ -3,6 +3,7 @@ package com.example.nexus.controller;
 import com.example.nexus.dto.MeetingDtos.MeetingRequest;
 import com.example.nexus.dto.MeetingDtos.MeetingResponse;
 import com.example.nexus.service.MeetingService;
+import com.example.nexus.util.JwtUtil;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -23,64 +24,66 @@ public class MeetingController {
     @Autowired
     private MeetingService meetingService;
 
-    // ── CREATE ─────────────────────────────────────────────────────────────────
-    // Frontend sends multipart/form-data:
-    //   Part "dto"   → JSON blob (MeetingRequest)
-    //   Part "files" → optional file attachments
-    @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public MeetingResponse create(
-            @RequestPart("dto")                      String          dtoJson,
-            @RequestPart(value = "files", required = false) List<MultipartFile> files) throws Exception {
+    @Autowired
+    private JwtUtil jwtUtil;
 
-        MeetingRequest req = parseDto(dtoJson);
-        return meetingService.create(req, files);
+    private String extractEmail(String authHeader) {
+        return jwtUtil.extractEmail(authHeader.replace("Bearer ", ""));
     }
 
-    // ── GET ALL (search + filter) ──────────────────────────────────────────────
+    @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public MeetingResponse create(
+            @RequestPart("dto") String dtoJson,
+            @RequestPart(value = "files", required = false) List<MultipartFile> files,
+            @RequestHeader("Authorization") String authHeader) throws Exception {
+
+        MeetingRequest req = parseDto(dtoJson);
+        return meetingService.create(req, files, extractEmail(authHeader));
+    }
+
     @GetMapping
     public List<MeetingResponse> getAll(
             @RequestParam(required = false) String search,
             @RequestParam(required = false) String status,
-            @RequestParam(required = false) Long   ownerId) {
+            @RequestParam(required = false) Long ownerId,
+            @RequestHeader("Authorization") String authHeader) {
 
-        return meetingService.getAll(search, status, ownerId);
+        return meetingService.getAll(search, status, ownerId, extractEmail(authHeader));
     }
 
-    // ── GET BY ID ──────────────────────────────────────────────────────────────
     @GetMapping("/{id}")
-    public MeetingResponse getById(@PathVariable Long id) {
-        return meetingService.getById(id);
+    public MeetingResponse getById(
+            @PathVariable Long id,
+            @RequestHeader("Authorization") String authHeader) {
+        return meetingService.getById(id, extractEmail(authHeader));
     }
 
-    // ── UPDATE ─────────────────────────────────────────────────────────────────
     @PutMapping(value = "/{id}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public MeetingResponse update(
-            @PathVariable                            Long            id,
-            @RequestPart("dto")                      String          dtoJson,
-            @RequestPart(value = "files", required = false) List<MultipartFile> files) throws Exception {
+            @PathVariable Long id,
+            @RequestPart("dto") String dtoJson,
+            @RequestPart(value = "files", required = false) List<MultipartFile> files,
+            @RequestHeader("Authorization") String authHeader) throws Exception {
 
         MeetingRequest req = parseDto(dtoJson);
-        return meetingService.update(id, req, files);
+        return meetingService.update(id, req, files, extractEmail(authHeader));
     }
 
-    // ── START MEETING ──────────────────────────────────────────────────────────
-    // Transitions status: Scheduled → In Progress
     @PatchMapping("/{id}/start")
-    public MeetingResponse startMeeting(@PathVariable Long id) {
-        return meetingService.startMeeting(id);
+    public MeetingResponse startMeeting(
+            @PathVariable Long id,
+            @RequestHeader("Authorization") String authHeader) {
+        return meetingService.startMeeting(id, extractEmail(authHeader));
     }
 
-    // ── DELETE ─────────────────────────────────────────────────────────────────
     @DeleteMapping("/{id}")
-    public Map<String, String> delete(@PathVariable Long id) {
-        meetingService.delete(id);
+    public Map<String, String> delete(
+            @PathVariable Long id,
+            @RequestHeader("Authorization") String authHeader) {
+        meetingService.delete(id, extractEmail(authHeader));
         return Map.of("message", "Meeting deleted successfully");
     }
 
-    // ── HELPER ─────────────────────────────────────────────────────────────────
-    // Parse the JSON "dto" part into MeetingRequest.
-    // ObjectMapper is created inline so the controller stays stateless and
-    // avoids any Spring bean-wiring complications with multipart parsing.
     private MeetingRequest parseDto(String json) throws Exception {
         ObjectMapper mapper = new ObjectMapper();
         mapper.registerModule(new JavaTimeModule());

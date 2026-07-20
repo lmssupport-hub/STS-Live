@@ -406,4 +406,40 @@ public class UserService {
 
         return ResponseEntity.ok(Map.of("message", "Password reset successfully"));
     }
+    
+    
+    
+    public ResponseEntity<?> getTeamMembers(String requesterEmail) {
+        Optional<User> requesterOpt = userRepository.findByEmail(requesterEmail);
+        if (requesterOpt.isEmpty()) {
+            return ResponseEntity
+                    .status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("message", "Invalid session"));
+        }
+
+        User requester = requesterOpt.get();
+
+        Long teamAdminId = ("ADMIN".equals(requester.getRole()) || "SUPER_ADMIN".equals(requester.getRole()))
+                ? requester.getId()
+                : requester.getCreatedByAdminId();
+
+        if (teamAdminId == null) {
+            return ResponseEntity.ok(List.of());
+        }
+
+        List<User> team = new java.util.ArrayList<>();
+        userRepository.findById(teamAdminId).ifPresent(team::add);
+        team.addAll(userRepository.findByCreatedByAdminId(teamAdminId));
+
+        var result = team.stream()
+                .distinct()
+                .map(this::toDto)
+                .toList();
+
+        return ResponseEntity.ok(result);
+    }
+    
+    
+    
+    
 }

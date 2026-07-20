@@ -21,7 +21,6 @@ import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Optional;
 import java.util.stream.Collectors;
 
 @Service
@@ -42,18 +41,37 @@ public class MeetingService {
     @Autowired
     private UserRepository userRepository;
 
+    // ── Resolve which "team" the requester belongs to ───────────────
+    private Long resolveTeamAdminId(String requesterEmail) {
+        User requester = userRepository.findByEmail(requesterEmail)
+                .orElseThrow(() -> new RuntimeException("Invalid session"));
+        if ("ADMIN".equals(requester.getRole()) || "SUPER_ADMIN".equals(requester.getRole())) {
+            return requester.getId();
+        }
+        if (requester.getCreatedByAdminId() == null) {
+            throw new RuntimeException("Your account is not linked to a team yet");
+        }
+        return requester.getCreatedByAdminId();
+    }
+
+    private void assertMeetingInTeam(Meeting meeting, Long teamAdminId) {
+        if (!meeting.getTeamAdminId().equals(teamAdminId)) {
+            throw new RuntimeException("You don't have access to this meeting");
+        }
+    }
+
     // ── CREATE ─────────────────────────────────────────────────────────────────
 
-    public MeetingResponse create(MeetingRequest req, List<MultipartFile> files) {
+    public MeetingResponse create(MeetingRequest req, List<MultipartFile> files, String requesterEmail) {
+        Long teamAdminId = resolveTeamAdminId(requesterEmail);
         validate(req);
 
         Meeting meeting = new Meeting();
+        meeting.setTeamAdminId(teamAdminId);
         applyRequest(meeting, req);
 
-        // Parse agenda lines → action items
         meeting.setActionItems(parseActionItems(req.getAgenda()));
 
-        // Handle uploaded documents (store filenames; swap for cloud URLs in prod)
         if (files != null && !files.isEmpty()) {
             List<String> urls = files.stream()
                     .filter(f -> f != null && !f.isEmpty())
@@ -68,7 +86,8 @@ public class MeetingService {
 
     // ── GET ALL (with optional filters) ───────────────────────────────────────
 
-    public List<MeetingResponse> getAll(String search, String status, Long ownerId) {
+    public List<MeetingResponse> getAll(String search, String status, Long ownerId, String requesterEmail) {
+        Long teamAdminId = resolveTeamAdminId(requesterEmail);
         List<Meeting> result;
 
         boolean hasSearch  = search  != null && !search.isBlank();
@@ -76,21 +95,21 @@ public class MeetingService {
         boolean hasOwner   = ownerId != null;
 
         if (hasSearch && hasStatus && hasOwner) {
-            result = meetingRepository.searchByKeywordStatusAndOwner(search, status, ownerId);
+            result = meetingRepository.searchByKeywordStatusAndOwner(search, status, ownerId, teamAdminId);
         } else if (hasSearch && hasStatus) {
-            result = meetingRepository.searchByKeywordAndStatus(search, status);
+            result = meetingRepository.searchByKeywordAndStatus(search, status, teamAdminId);
         } else if (hasSearch && hasOwner) {
-            result = meetingRepository.searchByKeywordAndOwner(search, ownerId);
+            result = meetingRepository.searchByKeywordAndOwner(search, ownerId, teamAdminId);
         } else if (hasSearch) {
-            result = meetingRepository.searchByKeyword(search);
+            result = meetingRepository.searchByKeyword(search, teamAdminId);
         } else if (hasStatus && hasOwner) {
-            result = meetingRepository.findByStatusAndOwnerId(status, ownerId);
+            result = meetingRepository.findByStatusAndOwnerIdAndTeamAdminId(status, ownerId, teamAdminId);
         } else if (hasStatus) {
-            result = meetingRepository.findByStatus(status);
+            result = meetingRepository.findByStatusAndTeamAdminId(status, teamAdminId);
         } else if (hasOwner) {
-            result = meetingRepository.findByOwnerId(ownerId);
+            result = meetingRepository.findByOwnerIdAndTeamAdminId(ownerId, teamAdminId);
         } else {
-            result = meetingRepository.findAll();
+            result = meetingRepository.findByTeamAdminId(teamAdminId);
         }
 
         return result.stream().map(this::toResponse).collect(Collectors.toList());
@@ -98,22 +117,25 @@ public class MeetingService {
 
     // ── GET BY ID ──────────────────────────────────────────────────────────────
 
-    public MeetingResponse getById(Long id) {
+    public MeetingResponse getById(Long id, String requesterEmail) {
+        Long teamAdminId = resolveTeamAdminId(requesterEmail);
         Meeting meeting = findOrThrow(id);
+        assertMeetingInTeam(meeting, teamAdminId);
         return toResponse(meeting);
     }
 
     // ── UPDATE ─────────────────────────────────────────────────────────────────
 
-    public MeetingResponse update(Long id, MeetingRequest req, List<MultipartFile> files) {
+    public MeetingResponse update(Long id, MeetingRequest req, List<MultipartFile> files, String requesterEmail) {
+        Long teamAdminId = resolveTeamAdminId(requesterEmail);
         Meeting meeting = findOrThrow(id);
+        assertMeetingInTeam(meeting, teamAdminId);
+
         validate(req);
         applyRequest(meeting, req);
 
-        // Re-parse action items from updated agenda
         meeting.setActionItems(parseActionItems(req.getAgenda()));
 
-        // Append newly uploaded documents (keep existing ones)
         if (files != null && !files.isEmpty()) {
             List<String> existing = new ArrayList<>(
                     meeting.getDocumentUrls() == null ? List.of() : meeting.getDocumentUrls());
@@ -130,8 +152,10 @@ public class MeetingService {
 
     // ── START MEETING (status: Scheduled → In Progress) ───────────────────────
 
-    public MeetingResponse startMeeting(Long id) {
+    public MeetingResponse startMeeting(Long id, String requesterEmail) {
+        Long teamAdminId = resolveTeamAdminId(requesterEmail);
         Meeting meeting = findOrThrow(id);
+        assertMeetingInTeam(meeting, teamAdminId);
 
         if (!"Scheduled".equals(meeting.getStatus())) {
             throw new RuntimeException("Only Scheduled meetings can be started");
@@ -143,8 +167,10 @@ public class MeetingService {
 
     // ── DELETE ─────────────────────────────────────────────────────────────────
 
-    public void delete(Long id) {
-        findOrThrow(id);   // throws 404-style RuntimeException if missing
+    public void delete(Long id, String requesterEmail) {
+        Long teamAdminId = resolveTeamAdminId(requesterEmail);
+        Meeting meeting = findOrThrow(id);
+        assertMeetingInTeam(meeting, teamAdminId);
         meetingRepository.deleteById(id);
     }
 
@@ -212,7 +238,6 @@ public class MeetingService {
         }
     }
 
-    /** Split agenda by newlines; each non-blank line becomes an action item. */
     private List<String> parseActionItems(String agenda) {
         if (agenda == null || agenda.isBlank()) return List.of();
         return Arrays.stream(agenda.split("\\r?\\n"))
@@ -247,19 +272,16 @@ public class MeetingService {
         if (m.getUpdatedAt() != null)
             res.setUpdatedAt(m.getUpdatedAt().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
 
-        // Enrich: owner name
         if (m.getOwnerId() != null) {
             userRepository.findById(m.getOwnerId()).ifPresent(u ->
                     res.setOwnerName(u.getFirstName()));
         }
 
-        // Enrich: project name
         if (m.getProjectId() != null) {
             projectRepository.findById(m.getProjectId()).ifPresent(p ->
                     res.setProjectName(p.getProjectName()));
         }
 
-        // Enrich: member details
         if (m.getMemberIds() != null && !m.getMemberIds().isEmpty()) {
             List<MemberInfo> members = m.getMemberIds().stream()
                     .map(uid -> userRepository.findById(uid)

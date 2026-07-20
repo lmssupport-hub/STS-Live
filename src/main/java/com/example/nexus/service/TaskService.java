@@ -30,9 +30,36 @@ public class TaskService {
         this.userRepository    = userRepository;
     }
 
+    // ── Resolve which "team" the requester belongs to ───────────────
+    private Long resolveTeamAdminId(String requesterEmail) {
+        User requester = userRepository.findByEmail(requesterEmail)
+                .orElseThrow(() -> new RuntimeException("Invalid session"));
+        if ("ADMIN".equals(requester.getRole()) || "SUPER_ADMIN".equals(requester.getRole())) {
+            return requester.getId();
+        }
+        if (requester.getCreatedByAdminId() == null) {
+            throw new RuntimeException("Your account is not linked to a team yet");
+        }
+        return requester.getCreatedByAdminId();
+    }
+
+    private void assertProjectInTeam(Project project, Long teamAdminId) {
+        if (!project.getTeamAdminId().equals(teamAdminId)) {
+            throw new RuntimeException("You don't have access to this project's tasks");
+        }
+    }
+
+    private void assertTaskInTeam(Task task, Long teamAdminId) {
+        assertProjectInTeam(task.getProject(), teamAdminId);
+    }
+
     // ── Get all tasks for a project ──────────────────────────────────────
     @Transactional(readOnly = true)
-    public List<TaskResponse> getTasksByProject(Long projectId) {
+    public List<TaskResponse> getTasksByProject(Long projectId, String requesterEmail) {
+        Long teamAdminId = resolveTeamAdminId(requesterEmail);
+        Project project = findProjectOrThrow(projectId);
+        assertProjectInTeam(project, teamAdminId);
+
         return taskRepository.findByProjectId(projectId)
                 .stream()
                 .map(this::toResponse)
@@ -41,16 +68,22 @@ public class TaskService {
 
     // ── Get single task ──────────────────────────────────────────────────
     @Transactional(readOnly = true)
-    public TaskResponse getTaskById(Long id) {
-        return toResponse(findTaskOrThrow(id));
+    public TaskResponse getTaskById(Long id, String requesterEmail) {
+        Long teamAdminId = resolveTeamAdminId(requesterEmail);
+        Task task = findTaskOrThrow(id);
+        assertTaskInTeam(task, teamAdminId);
+        return toResponse(task);
     }
 
     // ── Create task ──────────────────────────────────────────────────────
     @Transactional
-    public TaskResponse createTask(CreateTaskRequest req) {
+    public TaskResponse createTask(CreateTaskRequest req, String requesterEmail) {
+        Long teamAdminId = resolveTeamAdminId(requesterEmail);
 
         Project project = findProjectOrThrow(req.projectId());
-        User    user    = findActiveUserOrThrow(req.assignedUserId());
+        assertProjectInTeam(project, teamAdminId);
+
+        User user = findActiveUserOrThrow(req.assignedUserId(), teamAdminId);
 
         validatePriority(req.priority());
         validateStartDate(req.startDate(), project);
@@ -66,7 +99,7 @@ public class TaskService {
         task.setDueDate(req.dueDate());
         task.setTargetCount(req.targetCount());
         task.setPriority(req.priority());
-        task.setStatus("Not Started");   // always forced on creation
+        task.setStatus("Not Started");
         task.setSubTasks(new ArrayList<>());
 
         applySubTasks(task, req.subTasks());
@@ -76,11 +109,16 @@ public class TaskService {
 
     // ── Update task ──────────────────────────────────────────────────────
     @Transactional
-    public TaskResponse updateTask(Long id, CreateTaskRequest req) {
+    public TaskResponse updateTask(Long id, CreateTaskRequest req, String requesterEmail) {
+        Long teamAdminId = resolveTeamAdminId(requesterEmail);
 
-        Task    task    = findTaskOrThrow(id);
+        Task task = findTaskOrThrow(id);
+        assertTaskInTeam(task, teamAdminId);
+
         Project project = findProjectOrThrow(req.projectId());
-        User    user    = findActiveUserOrThrow(req.assignedUserId());
+        assertProjectInTeam(project, teamAdminId);
+
+        User user = findActiveUserOrThrow(req.assignedUserId(), teamAdminId);
 
         validatePriority(req.priority());
         validateStatus(req.status());
@@ -98,7 +136,6 @@ public class TaskService {
         task.setPriority(req.priority());
         task.setStatus(req.status() != null ? req.status() : task.getStatus());
 
-        // Replace sub-tasks completely
         task.getSubTasks().clear();
         applySubTasks(task, req.subTasks());
 
@@ -107,8 +144,11 @@ public class TaskService {
 
     // ── Delete task ──────────────────────────────────────────────────────
     @Transactional
-    public void deleteTask(Long id) {
-        taskRepository.delete(findTaskOrThrow(id));
+    public void deleteTask(Long id, String requesterEmail) {
+        Long teamAdminId = resolveTeamAdminId(requesterEmail);
+        Task task = findTaskOrThrow(id);
+        assertTaskInTeam(task, teamAdminId);
+        taskRepository.delete(task);
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -137,16 +177,23 @@ public class TaskService {
                 .orElseThrow(() -> new RuntimeException("Project not found with id: " + projectId));
     }
 
-    private User findActiveUserOrThrow(Long userId) {
+    // ✅ UPDATED — assignedUserId, given if not, must be team's own admin;
+    // never picks an arbitrary user from the whole DB anymore.
+    private User findActiveUserOrThrow(Long userId, Long teamAdminId) {
         if (userId != null) {
-            return userRepository.findById(userId)
+            User user = userRepository.findById(userId)
                     .orElseThrow(() -> new RuntimeException("User not found with id: " + userId));
+            Long userTeamId = ("ADMIN".equals(user.getRole()) || "SUPER_ADMIN".equals(user.getRole()))
+                    ? user.getId()
+                    : user.getCreatedByAdminId();
+            if (userTeamId == null || !userTeamId.equals(teamAdminId)) {
+                throw new RuntimeException("Assigned user does not belong to your team");
+            }
+            return user;
         }
 
-        return userRepository.findAll()
-                .stream()
-                .findFirst()
-                .orElseThrow(() -> new RuntimeException("No users found in database"));
+        return userRepository.findById(teamAdminId)
+                .orElseThrow(() -> new RuntimeException("Team admin not found"));
     }
 
     // ── Validations ───────────────────────────────────────────────────────
@@ -214,7 +261,7 @@ public class TaskService {
                 t.getPriority(),
                 t.getStatus(),
                 t.getAssignedUser().getId(),
-                t.getAssignedUser().getFirstName(),   // ← User.getUsername()
+                t.getAssignedUser().getFirstName(),
                 subs,
                 t.getCreatedAt() != null ? t.getCreatedAt().toString() : null,
                 t.getUpdatedAt() != null ? t.getUpdatedAt().toString() : null

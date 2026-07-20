@@ -13,6 +13,7 @@ import com.example.nexus.exception.ResourceNotFoundException;
 import com.example.nexus.repository.ErrorReportRepository;
 import com.example.nexus.repository.ProjectRepository;
 import com.example.nexus.repository.TaskRepository;
+import com.example.nexus.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -46,22 +47,48 @@ public class ErrorReportService {
     @Autowired
     private TaskRepository taskRepository;
 
+    @Autowired
+    private UserRepository userRepository;
+
+    // ── Resolve which "team" the requester belongs to ───────────────
+    private Long resolveTeamAdminId(String requesterEmail) {
+        User requester = userRepository.findByEmail(requesterEmail)
+                .orElseThrow(() -> new ResourceNotFoundException("Invalid session"));
+        if ("ADMIN".equals(requester.getRole()) || "SUPER_ADMIN".equals(requester.getRole())) {
+            return requester.getId();
+        }
+        if (requester.getCreatedByAdminId() == null) {
+            throw new BadRequestException("Your account is not linked to a team yet");
+        }
+        return requester.getCreatedByAdminId();
+    }
+
+    private void assertProjectInTeam(Project project, Long teamAdminId) {
+        if (!project.getTeamAdminId().equals(teamAdminId)) {
+            throw new BadRequestException("You don't have access to this project");
+        }
+    }
+
+    private void assertErrorInTeam(ErrorReport error, Long teamAdminId) {
+        assertProjectInTeam(error.getProject(), teamAdminId);
+    }
+
     // ── CREATE (Field 14) ─────────────────────────────────────────────────
     @Transactional
-    public ErrorResponse createError(CreateErrorRequest request, MultipartFile screenshot) {
+    public ErrorResponse createError(CreateErrorRequest request, MultipartFile screenshot, String requesterEmail) {
+        Long teamAdminId = resolveTeamAdminId(requesterEmail);
 
         Project project = projectRepository.findById(request.getProjectId())
                 .orElseThrow(() -> new ResourceNotFoundException("Project not found with id: " + request.getProjectId()));
+        assertProjectInTeam(project, teamAdminId);
 
         Task task = taskRepository.findById(request.getTaskId())
                 .orElseThrow(() -> new ResourceNotFoundException("Task not found with id: " + request.getTaskId()));
 
-        // Business rule: selected Task must belong to selected Project (Field 4 dependency)
         if (task.getProject() == null || !task.getProject().getId().equals(project.getId())) {
             throw new BadRequestException("Selected task does not belong to the selected project");
         }
 
-        // Field 10: Assign User is auto-populated from the Task's assigned user
         User assignedUser = task.getAssignedUser();
         if (assignedUser == null) {
             throw new BadRequestException("Selected task has no assigned user; cannot auto-populate Assign User");
@@ -76,7 +103,7 @@ public class ErrorReportService {
         error.setPriority(request.getPriority());
         error.setComments(request.getComments());
         error.setAssignedUser(assignedUser);
-        error.setStatus(ErrorStatus.Open); // Field 11 default
+        error.setStatus(ErrorStatus.Open);
 
         if (screenshot != null && !screenshot.isEmpty()) {
             String path = storeScreenshot(screenshot);
@@ -90,7 +117,8 @@ public class ErrorReportService {
 
     // ── LIST (Field 1 & 2: search + filter) ─────────────────────────────
     public List<ErrorResponse> getErrors(String keyword, String status, String priority,
-                                          Long assignedUserId, Long projectId) {
+                                          Long assignedUserId, Long projectId, String requesterEmail) {
+        Long teamAdminId = resolveTeamAdminId(requesterEmail);
 
         ErrorStatus statusEnum = parseEnumOrNull(status, ErrorStatus.class, "Status");
         Priority priorityEnum = parseEnumOrNull(priority, Priority.class, "Priority");
@@ -98,23 +126,26 @@ public class ErrorReportService {
         String normalizedKeyword = (keyword == null || keyword.isBlank()) ? null : keyword.trim();
 
         List<ErrorReport> results = errorReportRepository.searchAndFilter(
-                normalizedKeyword, statusEnum, priorityEnum, assignedUserId, projectId);
+                normalizedKeyword, statusEnum, priorityEnum, assignedUserId, projectId, teamAdminId);
 
         return results.stream().map(this::toResponse).collect(Collectors.toList());
     }
 
     // ── GET BY ID (Field 13: Show More) ─────────────────────────────────
-    public ErrorResponse getErrorById(Long id) {
+    public ErrorResponse getErrorById(Long id, String requesterEmail) {
+        Long teamAdminId = resolveTeamAdminId(requesterEmail);
         ErrorReport error = findOrThrow(id);
+        assertErrorInTeam(error, teamAdminId);
         return toResponse(error);
     }
 
     // ── UPDATE (Field 15) ────────────────────────────────────────────────
     @Transactional
-    public ErrorResponse updateError(Long id, UpdateErrorRequest request, MultipartFile screenshot) {
+    public ErrorResponse updateError(Long id, UpdateErrorRequest request, MultipartFile screenshot, String requesterEmail) {
+        Long teamAdminId = resolveTeamAdminId(requesterEmail);
         ErrorReport error = findOrThrow(id);
+        assertErrorInTeam(error, teamAdminId);
 
-        // Edge Case #4: reject if someone else already saved a newer version of this error
         if (!error.getVersion().equals(request.getVersion())) {
             throw new ConflictException(
                     "This error was updated by another user. Please refresh and try again.");
@@ -123,6 +154,7 @@ public class ErrorReportService {
         if (request.getProjectId() != null && !request.getProjectId().equals(error.getProject().getId())) {
             Project project = projectRepository.findById(request.getProjectId())
                     .orElseThrow(() -> new ResourceNotFoundException("Project not found with id: " + request.getProjectId()));
+            assertProjectInTeam(project, teamAdminId);
             error.setProject(project);
         }
 
@@ -134,7 +166,6 @@ public class ErrorReportService {
                 throw new BadRequestException("Selected task does not belong to the selected project");
             }
             error.setTask(task);
-            // Re-populate Assign User from the newly selected task (Field 10 dependency)
             error.setAssignedUser(task.getAssignedUser());
         }
 
@@ -148,7 +179,6 @@ public class ErrorReportService {
             error.setStatus(parseEnumOrThrow(request.getStatus(), ErrorStatus.class, "Status"));
         }
 
-        // Field 9: replace screenshot only if a new one is supplied
         if (screenshot != null && !screenshot.isEmpty()) {
             validateScreenshot(screenshot);
             deleteScreenshot(error.getScreenshotPath());
@@ -163,12 +193,11 @@ public class ErrorReportService {
 
     // ── UPDATE STATUS (Field 11 quick action) ────────────────────────────
     @Transactional
-    public ErrorResponse updateStatus(Long id, UpdateStatusRequest request) {
+    public ErrorResponse updateStatus(Long id, UpdateStatusRequest request, String requesterEmail) {
+        Long teamAdminId = resolveTeamAdminId(requesterEmail);
         ErrorReport error = findOrThrow(id);
+        assertErrorInTeam(error, teamAdminId);
 
-        // Edge Case #4 + #5: version check prevents two concurrent status changes
-        // from clobbering each other; the final request always wins since each
-        // PATCH call operates on the latest committed row.
         if (!error.getVersion().equals(request.getVersion())) {
             throw new ConflictException(
                     "This error was updated by another user. Please refresh and try again.");
@@ -182,10 +211,20 @@ public class ErrorReportService {
 
     // ── DELETE (Field 14, S#14) ───────────────────────────────────────────
     @Transactional
-    public void deleteError(Long id) {
+    public void deleteError(Long id, String requesterEmail) {
+        Long teamAdminId = resolveTeamAdminId(requesterEmail);
         ErrorReport error = findOrThrow(id);
+        assertErrorInTeam(error, teamAdminId);
         deleteScreenshot(error.getScreenshotPath());
         errorReportRepository.delete(error);
+    }
+
+    // ── SCREENSHOT ACCESS ─────────────────────────────────────────────────
+    public ErrorReport getErrorForScreenshot(Long id, String requesterEmail) {
+        Long teamAdminId = resolveTeamAdminId(requesterEmail);
+        ErrorReport error = findOrThrow(id);
+        assertErrorInTeam(error, teamAdminId);
+        return error;
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────
@@ -202,15 +241,12 @@ public class ErrorReportService {
 
     private <E extends Enum<E>> E parseEnumOrThrow(String value, Class<E> enumClass, String fieldLabel) {
         try {
-            // Allow "In Progress" as well as "In_Progress" coming from the UI dropdown
             String normalized = value.trim().replace(" ", "_");
             return Enum.valueOf(enumClass, normalized);
         } catch (IllegalArgumentException ex) {
             throw new BadRequestException("Invalid " + fieldLabel + " value: " + value);
         }
     }
-
-    // ── Field 9: Screenshot validation & storage (inline, same style as MeetingService) ──
 
     private void validateScreenshot(MultipartFile file) {
         if (file.getSize() > MAX_SIZE_BYTES) {
@@ -244,7 +280,6 @@ public class ErrorReportService {
         try {
             Files.deleteIfExists(Paths.get(filePath));
         } catch (IOException ignored) {
-            // best-effort cleanup
         }
     }
 
@@ -290,7 +325,6 @@ public class ErrorReportService {
     }
 
     private String resolveUserDisplayName(User user) {
-        // Matches MeetingService convention (uses getFirstName()/getLastName())
         String first = user.getFirstName() != null ? user.getFirstName() : "";
         String last = user.getLastName() != null ? user.getLastName() : "";
         String fullName = (first + " " + last).trim();

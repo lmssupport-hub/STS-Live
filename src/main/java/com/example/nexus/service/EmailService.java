@@ -1,4 +1,5 @@
 package com.example.nexus.service;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -8,10 +9,13 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.List;
 import java.util.Map;
+
 @Service
 public class EmailService {
+
     @Value("${resend.api.key}")
     private String resendApiKey;
+
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -33,7 +37,6 @@ public class EmailService {
         String roleLine = roleName != null
             ? "You've been invited with the role: " + roleName + "\n\n"
             : "";
-
         send(
             toEmail,
             "You're invited to Vativa Hub",
@@ -42,6 +45,19 @@ public class EmailService {
             roleLine +
             "Click the link below to complete your registration:\n" + registerLink + "\n\n" +
             "This link is valid for 72 hours.\n\n" +
+            "— Vativa Hub"
+        );
+    }
+
+    // NEW — reminder email for users who haven't acknowledged an instruction yet.
+    public void sendInstructionReminderEmail(String toEmail, String instructionTitle) {
+        send(
+            toEmail,
+            "Reminder: Pending Acknowledgement — Vativa Hub",
+            "Hello,\n\n" +
+            "This is a reminder that the following instruction is still pending your acknowledgement:\n\n" +
+            instructionTitle + "\n\n" +
+            "Please log in to Vativa Hub and acknowledge it at the earliest.\n\n" +
             "— Vativa Hub"
         );
     }

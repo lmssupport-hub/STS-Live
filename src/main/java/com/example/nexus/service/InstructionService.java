@@ -7,6 +7,7 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -35,6 +36,7 @@ public class InstructionService {
     @Autowired private UserRepository userRepository;
     @Autowired private FileStorageService fileStorageService;
     @Autowired private EmailService emailService;
+    @Autowired private NotificationService notificationService; // NEW
 
     private static final List<String> ALLOWED_CATEGORIES = List.of(
             "Client Instruction", "Process Update", "SOP Update", "Operational Guideline", "Announcement");
@@ -87,7 +89,12 @@ public class InstructionService {
             }
         }
 
-        return toDto(instructionRepository.save(saved));
+        Instruction finalSaved = instructionRepository.save(saved);
+
+        // NEW — notify every target user/team that a new instruction landed on them
+        notifyInstructionTargets(finalSaved, finalSaved.getTargetUsersOrTeams());
+
+        return toDto(finalSaved);
     }
 
     public List<InstructionResponseDTO> getAllInstructions(String search, String status, String category,
@@ -110,6 +117,11 @@ public class InstructionService {
             throw new RuntimeException("This instruction was updated by someone else. Please refresh and try again.");
         }
 
+        // NEW — remember who was already targeted before the update
+        List<String> previousTargets = existing.getTargetUsersOrTeams() != null
+                ? new ArrayList<>(existing.getTargetUsersOrTeams())
+                : new ArrayList<>();
+
         existing.setTitle(dto.getTitle().trim());
         existing.setCategory(dto.getCategory());
         existing.setDescription(dto.getDescription());
@@ -120,11 +132,25 @@ public class InstructionService {
         if (!isBlank(dto.getStatus())) existing.setStatus(dto.getStatus());
         existing.setUpdatedAt(LocalDateTime.now());
 
+        Instruction saved;
         try {
-            return toDto(instructionRepository.saveAndFlush(existing));
+            saved = instructionRepository.saveAndFlush(existing);
         } catch (ObjectOptimisticLockingFailureException e) {
             throw new RuntimeException("This instruction was updated by someone else. Please refresh and try again.");
         }
+
+        // NEW — only notify the newly added targets, not everyone again
+        List<String> newTargets = saved.getTargetUsersOrTeams() == null
+                ? List.of()
+                : saved.getTargetUsersOrTeams().stream()
+                        .filter(target -> !previousTargets.contains(target))
+                        .toList();
+
+        if (!newTargets.isEmpty()) {
+            notifyInstructionTargets(saved, newTargets);
+        }
+
+        return toDto(saved);
     }
 
     public void deleteInstruction(Long id, String requesterEmail) {
@@ -166,6 +192,15 @@ public class InstructionService {
                 // Edge Case #10 — log and continue; don't fail the whole batch
                 System.err.println("Reminder failed for " + ack.getUserEmail() + ": " + e.getMessage());
             }
+
+            // NEW — in-app reminder notification alongside the email
+            notificationService.notifyUserByEmail(
+                    ack.getUserEmail(),
+                    "Reminder: " + instruction.getTitle(),
+                    "You still need to acknowledge the instruction \"" + instruction.getTitle() + "\".",
+                    "Reminder Notification",
+                    "INSTRUCTION",
+                    instruction.getId());
         }
     }
 
@@ -177,6 +212,23 @@ public class InstructionService {
             }
         }
         return toDto(instructionRepository.save(instruction));
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  NEW — Notification helper
+    // ════════════════════════════════════════════════════════════════════
+
+    private void notifyInstructionTargets(Instruction instruction, List<String> targetEmails) {
+        if (targetEmails == null || targetEmails.isEmpty()) return;
+
+        String title = "New Instruction: " + instruction.getTitle();
+        String message = "A new instruction \"" + instruction.getTitle() + "\" (" + instruction.getCategory()
+                + ") has been issued. Priority: " + instruction.getPriority() + ".";
+
+        for (String targetEmail : targetEmails) {
+            notificationService.notifyUserByEmail(
+                    targetEmail, title, message, "New Instruction", "INSTRUCTION", instruction.getId());
+        }
     }
 
     private void attachDocument(Instruction instruction, MultipartFile file) {

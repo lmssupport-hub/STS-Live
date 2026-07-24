@@ -41,6 +41,9 @@ public class MeetingService {
     @Autowired
     private UserRepository userRepository;
 
+    @Autowired
+    private NotificationService notificationService; // NEW
+
     // ── Resolve which "team" the requester belongs to ───────────────
     private Long resolveTeamAdminId(String requesterEmail) {
         User requester = userRepository.findByEmail(requesterEmail)
@@ -81,6 +84,10 @@ public class MeetingService {
         }
 
         Meeting saved = meetingRepository.save(meeting);
+
+        // NEW — notify every member added to this new meeting
+        notifyMeetingMembers(saved, saved.getMemberIds());
+
         return toResponse(saved);
     }
 
@@ -132,6 +139,12 @@ public class MeetingService {
         assertMeetingInTeam(meeting, teamAdminId);
 
         validate(req);
+
+        // NEW — remember who was already a member before the update
+        List<Long> previousMemberIds = meeting.getMemberIds() != null
+                ? new ArrayList<>(meeting.getMemberIds())
+                : new ArrayList<>();
+
         applyRequest(meeting, req);
 
         meeting.setActionItems(parseActionItems(req.getAgenda()));
@@ -147,6 +160,18 @@ public class MeetingService {
         }
 
         Meeting saved = meetingRepository.save(meeting);
+
+        // NEW — only notify members who are newly added, not everyone again
+        List<Long> newMembers = saved.getMemberIds() == null
+                ? List.of()
+                : saved.getMemberIds().stream()
+                        .filter(memberId -> !previousMemberIds.contains(memberId))
+                        .collect(Collectors.toList());
+
+        if (!newMembers.isEmpty()) {
+            notifyMeetingMembers(saved, newMembers);
+        }
+
         return toResponse(saved);
     }
 
@@ -172,6 +197,23 @@ public class MeetingService {
         Meeting meeting = findOrThrow(id);
         assertMeetingInTeam(meeting, teamAdminId);
         meetingRepository.deleteById(id);
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  NEW — Notification helper
+    // ════════════════════════════════════════════════════════════════════
+
+    private void notifyMeetingMembers(Meeting meeting, List<Long> memberIds) {
+        if (memberIds == null || memberIds.isEmpty()) return;
+
+        String title = "New Meeting: " + meeting.getTitle();
+        String message = "You have been added to the meeting \"" + meeting.getTitle()
+                + "\" scheduled on " + meeting.getMeetingDateTime().format(DT_FMT) + ".";
+
+        for (Long memberId : memberIds) {
+            notificationService.notifyUser(
+                    memberId, title, message, "New Instruction", "MEETING", meeting.getId());
+        }
     }
 
     // ── VALIDATION ─────────────────────────────────────────────────────────────

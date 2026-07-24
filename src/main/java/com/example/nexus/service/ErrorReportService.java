@@ -26,6 +26,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -49,6 +50,9 @@ public class ErrorReportService {
 
     @Autowired
     private UserRepository userRepository;
+
+    @Autowired
+    private NotificationService notificationService; // NEW
 
     // ── Resolve which "team" the requester belongs to ───────────────
     private Long resolveTeamAdminId(String requesterEmail) {
@@ -112,6 +116,10 @@ public class ErrorReportService {
         }
 
         ErrorReport saved = errorReportRepository.save(error);
+
+        // NEW — notify the assigned user that an error has landed on them
+        notifyErrorAssignment(saved);
+
         return toResponse(saved);
     }
 
@@ -151,6 +159,11 @@ public class ErrorReportService {
                     "This error was updated by another user. Please refresh and try again.");
         }
 
+        // NEW — remember who was assigned before the update
+        Long previousAssignedUserId = error.getAssignedUser() != null
+                ? error.getAssignedUser().getId()
+                : null;
+
         if (request.getProjectId() != null && !request.getProjectId().equals(error.getProject().getId())) {
             Project project = projectRepository.findById(request.getProjectId())
                     .orElseThrow(() -> new ResourceNotFoundException("Project not found with id: " + request.getProjectId()));
@@ -188,6 +201,13 @@ public class ErrorReportService {
         }
 
         ErrorReport saved = errorReportRepository.save(error);
+
+        // NEW — only notify if the error's assigned user actually changed
+        Long newAssignedUserId = saved.getAssignedUser() != null ? saved.getAssignedUser().getId() : null;
+        if (!Objects.equals(previousAssignedUserId, newAssignedUserId)) {
+            notifyErrorAssignment(saved);
+        }
+
         return toResponse(saved);
     }
 
@@ -225,6 +245,23 @@ public class ErrorReportService {
         ErrorReport error = findOrThrow(id);
         assertErrorInTeam(error, teamAdminId);
         return error;
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    //  NEW — Notification helper
+    // ════════════════════════════════════════════════════════════════════
+
+    private void notifyErrorAssignment(ErrorReport error) {
+        User assignee = error.getAssignedUser();
+        if (assignee == null) return;
+
+        String title = "New Error Assigned: " + error.getPageTitle();
+        String message = "An error has been reported on \"" + error.getPageTitle()
+                + "\" in task \"" + error.getTask().getTaskName()
+                + "\". Priority: " + error.getPriority() + ".";
+
+        notificationService.notifyUser(
+                assignee.getId(), title, message, "New Instruction", "ERROR", error.getId());
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────

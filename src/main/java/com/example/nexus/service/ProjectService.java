@@ -1,7 +1,9 @@
 package com.example.nexus.service;
 
 import java.time.LocalDate;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import com.example.nexus.entity.Project;
@@ -19,6 +21,10 @@ public class ProjectService {
 
     @Autowired
     private UserRepository userRepository;
+
+    // NEW — fires notifications when users get assigned to a project
+    @Autowired
+    private NotificationService notificationService;
 
     // ── Resolve which "team" the requester belongs to ───────────────
     // Admin/Super Admin → their own id. Member → the admin who invited them.
@@ -48,7 +54,12 @@ public class ProjectService {
             }
         }
 
-        return projectRepository.save(project);
+        Project saved = projectRepository.save(project);
+
+        // NEW — notify every assigned user that they've been added to this project
+        notifyAssignedUsers(saved, saved.getAssignedUsers());
+
+        return saved;
     }
 
     public List<Project> getAllProjects(String requesterEmail) {
@@ -76,6 +87,12 @@ public class ProjectService {
 
         double target = calculateTarget(updatedProject.getFormulaRows());
 
+        // NEW — remember who was assigned before the update so we only notify
+        // users that are newly added, not everyone on every edit.
+        Set<String> previouslyAssigned = existing.getAssignedUsers() == null
+                ? new HashSet<>()
+                : new HashSet<>(existing.getAssignedUsers());
+
         existing.setProjectName(updatedProject.getProjectName());
         existing.setProjectDescription(updatedProject.getProjectDescription());
         existing.setProjectReceivedDate(updatedProject.getProjectReceivedDate());
@@ -97,7 +114,17 @@ public class ProjectService {
             existing.getFormulaRows().add(row);
         }
 
-        return projectRepository.save(existing);
+        Project saved = projectRepository.save(existing);
+
+        // NEW — notify only the newly-added assigned users
+        List<String> newlyAssigned = saved.getAssignedUsers() == null
+                ? List.of()
+                : saved.getAssignedUsers().stream()
+                        .filter(email -> !previouslyAssigned.contains(email))
+                        .toList();
+        notifyAssignedUsers(saved, newlyAssigned);
+
+        return saved;
     }
 
     public void deleteProject(Long id, String requesterEmail) {
@@ -107,6 +134,20 @@ public class ProjectService {
             throw new RuntimeException("You don't have access to this project");
         }
         projectRepository.deleteById(id);
+    }
+
+    // NEW — sends one "New Instruction" notification per assigned user email
+    private void notifyAssignedUsers(Project project, List<String> assignedUserEmails) {
+        if (assignedUserEmails == null || assignedUserEmails.isEmpty()) return;
+
+        String title = "New Instruction: " + project.getProjectName();
+        String message = "You have been assigned to the project \"" + project.getProjectName()
+                + "\". Due date: " + project.getDueDate() + ".";
+
+        for (String email : assignedUserEmails) {
+            notificationService.notifyUserByEmail(
+                    email, title, message, "New Instruction", "PROJECT", project.getId());
+        }
     }
 
     private void validateProject(Project project, Long currentId) {
@@ -244,8 +285,4 @@ public class ProjectService {
     private boolean isBlank(String value) {
         return value == null || value.trim().isEmpty();
     }
-    
-    
-    
-    
 }

@@ -13,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 @Service
@@ -21,13 +22,16 @@ public class TaskService {
     private final TaskRepository    taskRepository;
     private final ProjectRepository projectRepository;
     private final UserRepository    userRepository;
+    private final NotificationService notificationService; // NEW
 
     public TaskService(TaskRepository taskRepository,
                        ProjectRepository projectRepository,
-                       UserRepository userRepository) {
+                       UserRepository userRepository,
+                       NotificationService notificationService) {
         this.taskRepository    = taskRepository;
         this.projectRepository = projectRepository;
         this.userRepository    = userRepository;
+        this.notificationService = notificationService;
     }
 
     // ── Resolve which "team" the requester belongs to ───────────────
@@ -104,7 +108,12 @@ public class TaskService {
 
         applySubTasks(task, req.subTasks());
 
-        return toResponse(taskRepository.save(task));
+        Task saved = taskRepository.save(task);
+
+        // NEW — notify the assigned user that a new task has landed on them
+        notifyTaskAssignment(saved);
+
+        return toResponse(saved);
     }
 
     // ── Update task ──────────────────────────────────────────────────────
@@ -126,6 +135,11 @@ public class TaskService {
         validateDueDate(req.startDate(), req.dueDate(), project);
         validateTargetCount(req.targetCount(), project);
 
+        // NEW — remember who had this task before the update
+        Long previousAssignedUserId = task.getAssignedUser() != null
+                ? task.getAssignedUser().getId()
+                : null;
+
         task.setProject(project);
         task.setAssignedUser(user);
         task.setTaskName(req.taskName());
@@ -139,7 +153,14 @@ public class TaskService {
         task.getSubTasks().clear();
         applySubTasks(task, req.subTasks());
 
-        return toResponse(taskRepository.save(task));
+        Task saved = taskRepository.save(task);
+
+        // NEW — only notify if the task was (re)assigned to a different person
+        if (!Objects.equals(previousAssignedUserId, user.getId())) {
+            notifyTaskAssignment(saved);
+        }
+
+        return toResponse(saved);
     }
 
     // ── Delete task ──────────────────────────────────────────────────────
@@ -154,6 +175,20 @@ public class TaskService {
     // ════════════════════════════════════════════════════════════════════
     //  Private helpers
     // ════════════════════════════════════════════════════════════════════
+
+    // NEW — sends a "New Instruction" notification to the task's assigned user
+    private void notifyTaskAssignment(Task task) {
+        User assignee = task.getAssignedUser();
+        if (assignee == null) return;
+
+        String title = "New Instruction: " + task.getTaskName();
+        String message = "You have been assigned the task \"" + task.getTaskName()
+                + "\" in project \"" + task.getProject().getProjectName()
+                + "\". Due date: " + task.getDueDate() + ".";
+
+        notificationService.notifyUser(
+                assignee.getId(), title, message, "New Instruction", "TASK", task.getId());
+    }
 
     private void applySubTasks(Task task, List<SubTaskRequest> requests) {
         if (requests == null) return;

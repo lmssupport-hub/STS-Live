@@ -9,15 +9,15 @@ public class Taskdtos {
 
     // ── Create / Update request ──────────────────────────────────────────
     public record CreateTaskRequest(
-
         @NotNull(message = "Project selection is required")
         Long projectId,
 
         @NotBlank(message = "Main Task Name is required")
-        @Size(min = 3, message = "Main Task Name must be at least 3 characters")
+        @Size(min = 3, max = 200, message = "Main Task Name must be between 3 and 200 characters") // ✅ FIX: max added (Main Task Name-07)
         String taskName,
 
         @NotBlank(message = "Main Task Description is required")
+        @Size(max = 1000, message = "Main Task Description must be at most 1000 characters") // ✅ FIX: matches frontend's 1000-char limit shown in UI
         String description,
 
         @NotNull(message = "Start Date is required")
@@ -36,22 +36,17 @@ public class Taskdtos {
         // status: optional on creation (forced to "Not Started"), editable on update
         String status,
 
-        
         Long assignedUserId,
 
         @Valid
         List<SubTaskRequest> subTasks
-
     ) {}
 
     // ── Sub-task nested in request ───────────────────────────────────────
     public record SubTaskRequest(
-
-        @Size(min = 3, message = "Sub Task Name must be at least 3 characters")
+        @Size(min = 3, max = 200, message = "Sub Task Name must be between 3 and 200 characters") // ✅ FIX: same max-length rule applied
         String title,
-
         String description
-
     ) {}
 
     // ── Task response ────────────────────────────────────────────────────

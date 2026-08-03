@@ -57,7 +57,7 @@ public class UserService {
 
     
     public ResponseEntity<?> registerUser(User user, String inviteToken) {
-        if (userRepository.existsByEmail(user.getEmail())) {
+    	if (userRepository.existsByEmailIgnoreCase(user.getEmail())) {
             return ResponseEntity
                     .status(HttpStatus.CONFLICT)
                     .body(Map.of("message", "Email already exists"));

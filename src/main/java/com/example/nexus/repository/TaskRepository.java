@@ -1,12 +1,16 @@
 package com.example.nexus.repository;
+
 import com.example.nexus.entity.Task;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+
 import java.util.List;
+
 @Repository
 public interface TaskRepository extends JpaRepository<Task, Long> {
+
     @Query("""
             SELECT DISTINCT t FROM Task t
             LEFT JOIN FETCH t.subTasks
@@ -17,7 +21,6 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
             """)
     List<Task> findByProjectId(@Param("projectId") Long projectId);
 
-   
     @Query("""
             SELECT t.assignedUser.id, COUNT(t)
             FROM Task t
@@ -26,4 +29,10 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
             GROUP BY t.assignedUser.id
             """)
     List<Object[]> countActiveTasksByTeam(@Param("teamAdminId") Long teamAdminId);
+
+    // ✅ FIX (Main Task Name-06): duplicate task name check within the same project — used on CREATE
+    boolean existsByProject_IdAndTaskNameIgnoreCase(Long projectId, String taskName);
+
+    // ✅ FIX (Main Task Name-06): same check on UPDATE, excluding the task being edited itself
+    boolean existsByProject_IdAndTaskNameIgnoreCaseAndIdNot(Long projectId, String taskName, Long id);
 }

@@ -93,6 +93,7 @@ public class TaskService {
         validateStartDate(req.startDate(), project);
         validateDueDate(req.startDate(), req.dueDate(), project);
         validateTargetCount(req.targetCount(), project);
+        validateDuplicateTaskName(req.projectId(), req.taskName(), null); // ✅ FIX (Main Task Name-06)
 
         Task task = new Task();
         task.setProject(project);
@@ -134,6 +135,7 @@ public class TaskService {
         validateStartDate(req.startDate(), project);
         validateDueDate(req.startDate(), req.dueDate(), project);
         validateTargetCount(req.targetCount(), project);
+        validateDuplicateTaskName(req.projectId(), req.taskName(), id); // ✅ FIX (Main Task Name-06)
 
         // NEW — remember who had this task before the update
         Long previousAssignedUserId = task.getAssignedUser() != null
@@ -269,6 +271,20 @@ public class TaskService {
         if (project.getTarget() != null && targetCount > project.getTarget()) {
             throw new RuntimeException(
                 "Target cannot exceed Project Target (" + project.getTarget() + ")");
+        }
+    }
+
+    // ✅ FIX (Main Task Name-06): block duplicate Main Task Name within the same project.
+    // taskIdToExclude = null on CREATE, current task's id on UPDATE (so a task
+    // isn't flagged as a duplicate of itself when its own name is unchanged).
+    private void validateDuplicateTaskName(Long projectId, String taskName, Long taskIdToExclude) {
+        String trimmedName = taskName == null ? "" : taskName.trim();
+        boolean duplicateExists = (taskIdToExclude == null)
+                ? taskRepository.existsByProject_IdAndTaskNameIgnoreCase(projectId, trimmedName)
+                : taskRepository.existsByProject_IdAndTaskNameIgnoreCaseAndIdNot(projectId, trimmedName, taskIdToExclude);
+
+        if (duplicateExists) {
+            throw new RuntimeException("A task with this name already exists in this project");
         }
     }
 
